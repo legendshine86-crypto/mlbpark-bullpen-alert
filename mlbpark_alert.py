@@ -79,7 +79,7 @@ def load_config():
     # GitHub Actions 등에서는 토큰을 파일 대신 환경변수(Secrets)로 받는다
     for key in ("telegram_bot_token", "telegram_chat_id"):
         if os.environ.get(key.upper()):
-            cfg[key] = os.environ[key.upper()]
+            cfg[key] = os.environ[key.upper()].replace("\ufeff", "").strip()
     return cfg
 
 
