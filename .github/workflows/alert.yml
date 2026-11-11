@@ -1,0 +1,35 @@
+name: 엠팍 불펜 알림
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # 매시 정각 (GitHub 사정으로 몇 분 늦을 수 있음)
+  workflow_dispatch:       # Actions 탭에서 수동 실행
+
+permissions:
+  contents: write          # 보낸 글 목록(sent.json) 저장용
+
+concurrency:
+  group: mlbpark-alert
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TZ: Asia/Seoul       # 엠팍 시각(한국 시간) 기준으로 계산
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 인기글 확인 후 텔레그램 전송
+        run: python3 mlbpark_alert.py --realtime
+
+      - name: 보낸 글 목록 저장
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sent.json
+          git diff --cached --quiet || (git commit -m "sent.json 갱신" && git push)

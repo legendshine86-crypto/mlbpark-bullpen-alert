@@ -1,0 +1,11 @@
+{
+    "telegram_bot_token":  "",
+    "telegram_chat_id":  "",
+    "min_views":  3000,
+    "min_comments":  30,
+    "laugh_pattern":  "",
+    "laugh_check_min_comments":  1,
+    "window_hours":  24,
+    "request_delay_sec":  0.4,
+    "max_list_pages":  200
+}
