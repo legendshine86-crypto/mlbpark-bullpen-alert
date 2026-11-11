@@ -2,7 +2,7 @@ name: 엠팍 불펜 알림
 
 on:
   schedule:
-    - cron: "0 * * * *"   # 매시 정각 (GitHub 사정으로 몇 분 늦을 수 있음)
+    - cron: "1 * * * *"   # 매시 1분 (정각은 GitHub 예약이 몰려 누락되기 쉬움)
   workflow_dispatch:       # Actions 탭에서 수동 실행
 
 permissions:
