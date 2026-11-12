@@ -1,9 +1,11 @@
 name: 엠팍 불펜 알림
 
-# 동작 방식
-#  - 수동 실행(workflow_dispatch)된 실행은 약 5시간 동안 매시 1분마다 확인하고,
-#    끝나기 직전에 다음 실행을 스스로 시작한다(체인). GitHub 예약이 자주 누락돼서 쓰는 방식.
-#  - schedule은 예비용: 한 번 확인하고, 체인이 끊겨 있으면 다시 시작한다.
+# 동작 방식 (실행 1회 = 약 1시간)
+#  1) check : 새 서버(새 IP)에서 인기글 확인 후 텔레그램 전송
+#     - 같은 서버에서 계속 접속하면 엠팍이 끊어 버려서, 확인은 매번 새 서버에서 한다.
+#  2) next  : 다른 서버에서 다음 정시 1분까지 기다렸다가 다음 실행을 시작 (엠팍 접속 없음)
+#  schedule 은 예비용: 체인이 살아 있으면 아무것도 안 하고, 끊겨 있으면 다시 시작한다.
+#  멈추려면 Actions 탭에서 워크플로를 Disable.
 
 on:
   schedule:
@@ -14,68 +16,69 @@ permissions:
   contents: write          # 보낸 글 목록(sent.json) 저장
   actions: write           # 다음 실행 시작
 
-concurrency:
-  group: mlbpark-alert
-  cancel-in-progress: false
-
 jobs:
-  alert:
+  gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - id: g
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "go=yes" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          n=$(gh run list -R "$GITHUB_REPOSITORY" -w alert.yml -e workflow_dispatch -L 20 --json status \
+               -q '[.[] | select(.status!="completed")] | length')
+          if [ "$n" = "0" ]; then
+            echo "체인이 끊겨 있어 다시 시작함"
+            gh workflow run alert.yml -R "$GITHUB_REPOSITORY" --ref main
+          else
+            echo "체인 동작 중"
+          fi
+          echo "go=no" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: gate
+    if: needs.gate.outputs.go == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       TZ: Asia/Seoul
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: 인기글 확인 반복
+      - name: 인기글 확인 후 텔레그램 전송
+        run: python3 mlbpark_alert.py --realtime
+
+      - name: 보낸 글 목록 저장
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          check() {
-            python3 mlbpark_alert.py --realtime || echo "확인 실패 (다음 회차에 다시 시도)"
-            git add sent.json
-            if ! git diff --cached --quiet; then
-              git commit -q -m "sent.json 갱신"
-              git pull -q --rebase || true
-              git push -q || echo "푸시 실패"
-            fi
-          }
-
-          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
-            check
-            exit 0
+          git add sent.json
+          if ! git diff --cached --quiet; then
+            git commit -q -m "sent.json 갱신"
+            git pull -q --rebase || true
+            git push -q
           fi
 
-          START=$(date +%s)
-          LIMIT=$((5 * 3600 + 15 * 60))      # 5시간 15분까지만 반복
-          while true; do
-            check
-            now=$(date +%s)
-            # 다음 정시 1분까지 대기
-            next=$(( (now / 3600 + 1) * 3600 + 60 ))
-            if [ $((next + 600 - START)) -gt $LIMIT ]; then
-              break
-            fi
-            echo "다음 확인: $(date -d @$next '+%H:%M')"
-            sleep $((next - now))
-          done
-
-      - name: 다음 실행 시작
-        if: success() || failure()     # 직접 '취소'하면 체인이 멈춤
+  next:
+    needs: [gate, check]
+    if: ${{ !cancelled() && needs.gate.outputs.go == 'yes' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: 다음 정시 1분까지 대기 후 다음 실행 시작
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            gh workflow run alert.yml -R "$GITHUB_REPOSITORY" --ref main
-            echo "다음 실행을 시작함"
-          else
-            # 예약 실행: 체인이 살아 있지 않으면 다시 시작
-            n=$(gh run list -R "$GITHUB_REPOSITORY" -w alert.yml -e workflow_dispatch --json status \
-                 -q '[.[] | select(.status=="in_progress" or .status=="queued" or .status=="pending" or .status=="waiting")] | length')
-            if [ "$n" = "0" ]; then
-              gh workflow run alert.yml -R "$GITHUB_REPOSITORY" --ref main
-              echo "끊긴 체인을 다시 시작함"
-            fi
-          fi
+          now=$(date +%s)
+          next=$(( (now / 3600 + 1) * 3600 + 60 ))
+          echo "다음 실행: $(TZ=Asia/Seoul date -d @$next '+%H:%M')"
+          sleep $((next - now))
+          gh workflow run alert.yml -R "$GITHUB_REPOSITORY" --ref main
