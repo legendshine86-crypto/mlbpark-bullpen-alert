@@ -1,12 +1,18 @@
 name: 엠팍 불펜 알림
 
+# 동작 방식
+#  - 수동 실행(workflow_dispatch)된 실행은 약 5시간 동안 매시 1분마다 확인하고,
+#    끝나기 직전에 다음 실행을 스스로 시작한다(체인). GitHub 예약이 자주 누락돼서 쓰는 방식.
+#  - schedule은 예비용: 한 번 확인하고, 체인이 끊겨 있으면 다시 시작한다.
+
 on:
   schedule:
-    - cron: "1 * * * *"   # 매시 1분 (정각은 GitHub 예약이 몰려 누락되기 쉬움)
-  workflow_dispatch:       # Actions 탭에서 수동 실행
+    - cron: "1 * * * *"
+  workflow_dispatch:
 
 permissions:
-  contents: write          # 보낸 글 목록(sent.json) 저장용
+  contents: write          # 보낸 글 목록(sent.json) 저장
+  actions: write           # 다음 실행 시작
 
 concurrency:
   group: mlbpark-alert
@@ -15,21 +21,61 @@ concurrency:
 jobs:
   alert:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 350
     env:
-      TZ: Asia/Seoul       # 엠팍 시각(한국 시간) 기준으로 계산
+      TZ: Asia/Seoul
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: 인기글 확인 후 텔레그램 전송
-        run: python3 mlbpark_alert.py --realtime
-
-      - name: 보낸 글 목록 저장
-        if: always()
+      - name: 인기글 확인 반복
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add sent.json
-          git diff --cached --quiet || (git commit -m "sent.json 갱신" && git push)
+
+          check() {
+            python3 mlbpark_alert.py --realtime || echo "확인 실패 (다음 회차에 다시 시도)"
+            git add sent.json
+            if ! git diff --cached --quiet; then
+              git commit -q -m "sent.json 갱신"
+              git pull -q --rebase || true
+              git push -q || echo "푸시 실패"
+            fi
+          }
+
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            check
+            exit 0
+          fi
+
+          START=$(date +%s)
+          LIMIT=$((5 * 3600 + 15 * 60))      # 5시간 15분까지만 반복
+          while true; do
+            check
+            now=$(date +%s)
+            # 다음 정시 1분까지 대기
+            next=$(( (now / 3600 + 1) * 3600 + 60 ))
+            if [ $((next + 600 - START)) -gt $LIMIT ]; then
+              break
+            fi
+            echo "다음 확인: $(date -d @$next '+%H:%M')"
+            sleep $((next - now))
+          done
+
+      - name: 다음 실행 시작
+        if: success() || failure()     # 직접 '취소'하면 체인이 멈춤
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            gh workflow run alert.yml -R "$GITHUB_REPOSITORY" --ref main
+            echo "다음 실행을 시작함"
+          else
+            # 예약 실행: 체인이 살아 있지 않으면 다시 시작
+            n=$(gh run list -R "$GITHUB_REPOSITORY" -w alert.yml -e workflow_dispatch --json status \
+                 -q '[.[] | select(.status=="in_progress" or .status=="queued" or .status=="pending" or .status=="waiting")] | length')
+            if [ "$n" = "0" ]; then
+              gh workflow run alert.yml -R "$GITHUB_REPOSITORY" --ref main
+              echo "끊긴 체인을 다시 시작함"
+            fi
+          fi
