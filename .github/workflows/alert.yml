@@ -40,6 +40,7 @@ jobs:
           fi
           echo "go=no" >> "$GITHUB_OUTPUT"
 
+  # 엠팍이 일부 GitHub 서버 IP를 막아서, 실패하면 다른 새 서버에서 최대 2번 더 시도한다.
   check:
     needs: gate
     if: needs.gate.outputs.go == 'yes'
@@ -51,24 +52,39 @@ jobs:
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
     steps:
       - uses: actions/checkout@v4
-
       - name: 인기글 확인 후 텔레그램 전송
-        run: python3 mlbpark_alert.py --realtime
+        run: bash .github/check.sh
 
-      - name: 보낸 글 목록 저장
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add sent.json
-          if ! git diff --cached --quiet; then
-            git commit -q -m "sent.json 갱신"
-            git pull -q --rebase || true
-            git push -q
-          fi
+  retry1:
+    needs: check
+    if: ${{ !cancelled() && needs.check.result == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: Asia/Seoul
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 인기글 확인 후 텔레그램 전송
+        run: bash .github/check.sh
+
+  retry2:
+    needs: retry1
+    if: ${{ !cancelled() && needs.retry1.result == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TZ: Asia/Seoul
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 인기글 확인 후 텔레그램 전송
+        run: bash .github/check.sh
 
   next:
-    needs: [gate, check]
+    needs: [gate, check, retry1, retry2]
     if: ${{ !cancelled() && needs.gate.outputs.go == 'yes' }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
