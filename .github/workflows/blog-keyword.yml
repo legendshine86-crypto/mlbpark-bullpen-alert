@@ -1,0 +1,67 @@
+name: 빠삭정책 키워드 텔레그램 알림
+
+# 동작 방식
+#  - Claude 예약 작업(매일 12:17)이 blog-keywords/latest.md 를 올리면 그 내용을 텔레그램으로 보낸다.
+#  - 엠팍 알림봇과 같은 봇·같은 비밀값(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)을 쓴다.
+#  - Actions 탭에서 직접 실행(workflow_dispatch)하면 입력한 문구를 보낸다. 비워 두면 latest.md를 보낸다.
+
+on:
+  push:
+    branches: [main]
+    paths: ["blog-keywords/latest.md"]
+  workflow_dispatch:
+    inputs:
+      text:
+        description: "보낼 문구 (비우면 latest.md)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      INPUT_TEXT: ${{ github.event.inputs.text }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 텔레그램 전송
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys, urllib.parse, urllib.request
+
+          text = (os.environ.get("INPUT_TEXT") or "").strip()
+          if not text:
+              with open("blog-keywords/latest.md", encoding="utf-8") as f:
+                  text = f.read().strip()
+          if not text:
+              sys.exit("보낼 내용이 비어 있음")
+
+          # 텔레그램 한 메시지 최대 4096자 → 4000자 기준 줄 단위로 나눔
+          chunks = []
+          while text:
+              if len(text) <= 4000:
+                  chunks.append(text)
+                  break
+              cut = text.rfind("\n", 0, 4000)
+              cut = cut if cut > 0 else 4000
+              chunks.append(text[:cut])
+              text = text[cut:].lstrip("\n")
+
+          url = "https://api.telegram.org/bot" + os.environ["TELEGRAM_BOT_TOKEN"] + "/sendMessage"
+          for c in chunks:
+              data = urllib.parse.urlencode({
+                  "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+                  "text": c,
+                  "disable_web_page_preview": "true",
+              }).encode()
+              with urllib.request.urlopen(url, data=data, timeout=30) as r:
+                  res = json.load(r)
+              if not res.get("ok"):
+                  sys.exit("텔레그램 오류: " + str(res.get("description")))
+          print(f"전송 완료: {len(chunks)}개 메시지")
+          EOF
