@@ -1,0 +1,16 @@
+name: 접속 시험 (임시)
+on: workflow_dispatch
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix: { n: [1, 2, 3, 4, 5, 6] }
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -s https://api.ipify.org; echo
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+          for u in "https://mlbpark.donga.com/mp/b.php?b=bullpen&p=1" "http://mlbpark.donga.com/mp/b.php?b=bullpen&p=1" "https://m.mlbpark.donga.com/mp/b.php?b=bullpen&p=1" "https://mlbpark.donga.com/" "https://www.donga.com/"; do
+            r=$(curl -s -o /dev/null -m 15 -A "$UA" -w "%{http_code} %{size_download}B %{time_total}s" "$u" || echo "실패")
+            echo "$r  $u"
+          done
