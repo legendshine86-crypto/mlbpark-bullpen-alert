@@ -2,8 +2,8 @@ name: 빠삭정책 키워드 텔레그램 알림
 
 # 동작 방식
 #  - Claude 예약 작업(매일 12:17)이 blog-keywords/latest.md 를 올리면 그 내용을 텔레그램으로 보낸다.
-#  - 보내는 봇: 네이버 블로그 dot_liner 봇 (비밀값 BLOG_TELEGRAM_BOT_TOKEN, BLOG_TELEGRAM_CHAT_ID)
-#    두 비밀값이 아직 없으면 엠팍 알림봇(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)으로 대신 보낸다.
+#  - 보내는 봇: 네이버 블로그 dot_liner 봇만 (비밀값 BLOG_TELEGRAM_BOT_TOKEN, BLOG_TELEGRAM_CHAT_ID)
+#    이 저장소는 전달 통로로만 쓰고, 엠팍 알림봇으로는 보내지 않는다.
 #  - Actions 탭에서 직접 실행(workflow_dispatch)하면 입력한 문구를 보낸다. 비워 두면 latest.md를 보낸다.
 
 on:
@@ -26,8 +26,6 @@ jobs:
     env:
       BLOG_TOKEN: ${{ secrets.BLOG_TELEGRAM_BOT_TOKEN }}
       BLOG_CHAT: ${{ secrets.BLOG_TELEGRAM_CHAT_ID }}
-      MLB_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      MLB_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
       INPUT_TEXT: ${{ github.event.inputs.text }}
     steps:
       - uses: actions/checkout@v4
@@ -44,10 +42,10 @@ jobs:
           if not text:
               sys.exit("보낼 내용이 비어 있음")
 
-          if os.environ.get("BLOG_TOKEN") and os.environ.get("BLOG_CHAT"):
-              token, chat, who = os.environ["BLOG_TOKEN"], os.environ["BLOG_CHAT"], "dot_liner 봇"
-          else:
-              token, chat, who = os.environ["MLB_TOKEN"], os.environ["MLB_CHAT"], "엠팍 알림봇(대체)"
+          token, chat, who = os.environ.get("BLOG_TOKEN", ""), os.environ.get("BLOG_CHAT", ""), "dot_liner 봇"
+          if not token or not chat:
+              print("::error::dot_liner 봇 비밀값(BLOG_TELEGRAM_BOT_TOKEN, BLOG_TELEGRAM_CHAT_ID)이 없음")
+              sys.exit(1)
 
           # 값 앞뒤 공백·따옴표·"이름=" 접두어가 섞여 들어간 경우 정리 (값 자체는 출력하지 않음)
           import re
