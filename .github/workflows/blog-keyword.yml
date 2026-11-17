@@ -49,6 +49,23 @@ jobs:
           else:
               token, chat, who = os.environ["MLB_TOKEN"], os.environ["MLB_CHAT"], "엠팍 알림봇(대체)"
 
+          # 값 앞뒤 공백·따옴표·"이름=" 접두어가 섞여 들어간 경우 정리 (값 자체는 출력하지 않음)
+          import re
+          def clean(v):
+              v = v.strip().strip('"').strip("'").strip()
+              if "=" in v and not re.match(r"^\d+:", v):
+                  v = v.split("=", 1)[1].strip().strip('"').strip("'")
+              return v
+          token, chat = clean(token), clean(chat)
+          bad = []
+          if not re.fullmatch(r"\d+:[A-Za-z0-9_-]+", token):
+              bad.append(f"봇 토큰 형식 이상(길이 {len(token)})")
+          if not re.fullmatch(r"-?\d+|@\w+", chat):
+              bad.append(f"chat_id 형식 이상(길이 {len(chat)})")
+          if bad:
+              print(f"::error::{who}: " + ", ".join(bad))
+              sys.exit(1)
+
           # 텔레그램 한 메시지 최대 4096자 → 4000자 기준 줄 단위로 나눔
           chunks = []
           while text:
@@ -75,6 +92,8 @@ jobs:
                       res = json.load(e)
                   except Exception:
                       res = {"ok": False, "description": f"HTTP {e.code}"}
+              except Exception as e:
+                  res = {"ok": False, "description": type(e).__name__}
               if not res.get("ok"):
                   print(f"::error::텔레그램 오류({who}): {res.get('description')}")
                   sys.exit(1)
