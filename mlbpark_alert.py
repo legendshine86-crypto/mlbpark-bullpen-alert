@@ -29,6 +29,7 @@ from pathlib import Path
 BASE = "https://mlbpark.donga.com/mp/b.php"
 BOARD = "bullpen"
 PAGE_SIZE = 30
+CHECK_EVERY = 5  # 날짜만 표시된 구간에서 몇 페이지마다 글 시각을 확인할지
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = HERE / "config.json"
 REPORT_DIR = HERE / "reports"
@@ -41,7 +42,7 @@ DEFAULT_CONFIG = {
     "laugh_pattern": "",
     "laugh_check_min_comments": 1,
     "window_hours": 24,
-    "request_delay_sec": 0.4,
+    "request_delay_sec": 1.0,
     "max_list_pages": 200,
 }
 
@@ -180,6 +181,27 @@ def collect(cfg, f, max_pages=None):
     max_pages = max_pages or cfg["max_list_pages"]
     seen, result = set(), []
 
+    # 목록에 시각이 안 나오는(날짜만 있는) 글은 본문을 열어야 시각을 알 수 있다.
+    # 요청을 줄이려고 CHECK_EVERY 페이지마다 한 번만 확인하고,
+    # 범위를 넘은 것이 확인되면 그 사이 글들에서 이진 탐색으로 경계를 찾는다.
+    pending = []  # 마지막 확인 이후 쌓인 글 (최신순)
+
+    def when(idx):
+        r = pending[idx]
+        if r["day"] < cutoff.date():  # 확실히 범위 밖 → 조회 불필요
+            return datetime.combine(r["day"], datetime.min.time())
+        t = r["posted"] or fetch_post_time(f, r)
+        if t:
+            return t
+        # 시각을 못 읽은 글(삭제 등)은 목록 순서상 가장 가까운 글의 시각으로 대신한다
+        for j in sorted(range(len(pending)), key=lambda j: abs(j - idx))[:6]:
+            o = pending[j]
+            if j != idx and o["day"] == r["day"]:
+                t = o["posted"] or fetch_post_time(f, o)
+                if t:
+                    return t
+        return datetime.combine(r["day"], datetime.min.time())
+
     for i in range(max_pages):
         page_html = f.get(f"{BASE}?b={BOARD}&p={i * PAGE_SIZE + 1}")
         rows = [p for p in parse_list(page_html, today) if p["id"] not in seen]
@@ -191,46 +213,36 @@ def collect(cfg, f, max_pages=None):
             break
         for p in rows:
             seen.add(p["id"])
+        pending.extend(rows)
 
-        # 날짜만 있는 글: 이 페이지의 마지막 글 시각만 확인하고,
-        # cutoff 를 넘어가는 페이지라면 이진 탐색으로 경계를 찾는다.
-        def when(idx):
-            r = rows[idx]
-            if r["day"] < cutoff.date():  # 확실히 범위 밖 → 조회 불필요
-                return datetime.combine(r["day"], datetime.min.time())
-            t = r["posted"] or fetch_post_time(f, r)
-            if t:
-                return t
-            # 시각을 못 읽은 글(삭제 등)은 목록 순서상 가장 가까운 글의 시각으로 대신한다
-            for j in sorted(range(len(rows)), key=lambda j: abs(j - idx)):
-                o = rows[j]
-                if j != idx and o["day"] == r["day"]:
-                    t = o["posted"] or fetch_post_time(f, o)
-                    if t:
-                        return t
-            return datetime.combine(r["day"], datetime.min.time())
+        last = rows[-1]
+        cheap = last["posted"] is not None or last["day"] < cutoff.date()
+        if not cheap and (i + 1) % CHECK_EVERY != 0:
+            continue  # 이번 페이지는 시각 확인을 건너뜀
 
-        last_time = when(len(rows) - 1)
+        last_time = when(len(pending) - 1)
         if last_time >= cutoff:
-            result.extend(rows)
-            if i % 10 == 0:
-                log(f"목록 {i + 1}페이지 ({last_time:%m-%d %H:%M})")
+            result.extend(pending)
+            pending = []
+            log(f"목록 {i + 1}페이지 ({last_time:%m-%d %H:%M})")
             continue
 
-        # 경계 페이지 (최신순): cutoff 이상인 글의 개수 hi 를 이진 탐색
+        # 경계: pending 중 cutoff 이상인 글의 개수 hi 를 이진 탐색
         if when(0) < cutoff:
             hi = 0
         else:
-            lo, hi = 0, len(rows) - 1  # rows[lo] >= cutoff > rows[hi]
+            lo, hi = 0, len(pending) - 1  # pending[lo] >= cutoff > pending[hi]
             while hi - lo > 1:
                 mid = (lo + hi) // 2
                 if when(mid) >= cutoff:
                     lo = mid
                 else:
                     hi = mid
-        result.extend(rows[:hi])
+        result.extend(pending[:hi])
+        pending = []
         log(f"목록 {i + 1}페이지에서 수집 범위 끝에 도달")
         break
+    result.extend(pending)  # 페이지 한도에 걸려 끝난 경우
     return result, cutoff
 
 

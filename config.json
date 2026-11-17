@@ -6,6 +6,6 @@
     "laugh_pattern":  "",
     "laugh_check_min_comments":  1,
     "window_hours":  24,
-    "request_delay_sec":  0.4,
+    "request_delay_sec":  1.0,
     "max_list_pages":  200
 }
