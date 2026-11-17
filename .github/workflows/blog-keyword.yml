@@ -35,7 +35,7 @@ jobs:
       - name: 텔레그램 전송
         run: |
           python3 - <<'EOF'
-          import json, os, sys, urllib.parse, urllib.request
+          import json, os, sys, urllib.error, urllib.parse, urllib.request
 
           text = (os.environ.get("INPUT_TEXT") or "").strip()
           if not text:
@@ -67,9 +67,16 @@ jobs:
                   "text": c,
                   "disable_web_page_preview": "true",
               }).encode()
-              with urllib.request.urlopen(url, data=data, timeout=30) as r:
-                  res = json.load(r)
+              try:
+                  with urllib.request.urlopen(url, data=data, timeout=30) as r:
+                      res = json.load(r)
+              except urllib.error.HTTPError as e:
+                  try:
+                      res = json.load(e)
+                  except Exception:
+                      res = {"ok": False, "description": f"HTTP {e.code}"}
               if not res.get("ok"):
-                  sys.exit("텔레그램 오류: " + str(res.get("description")))
-          print(f"전송 완료({who}): {len(chunks)}개 메시지")
+                  print(f"::error::텔레그램 오류({who}): {res.get('description')}")
+                  sys.exit(1)
+          print(f"::notice::전송 완료({who}): {len(chunks)}개 메시지")
           EOF
